@@ -4,6 +4,8 @@ import math
 import itertools
 import os.path
 
+BLENDER_41_PLUS = bpy.app.version >= (4, 1, 0)
+
 from mathutils import Quaternion, Matrix, Vector
 
 from collections import defaultdict
@@ -28,7 +30,7 @@ from ..utils import *
 
 class War3Model:
 
-    default_texture = "Textures\white.blp"
+    default_texture = r"Textures\white.blp"
     decimal_places = 5
 
     def __init__(self, context):
@@ -54,14 +56,18 @@ class War3Model:
     @staticmethod
     def prepare_mesh(obj, context, matrix):
         mod = None
-        if obj.data.use_auto_smooth:
+        use_auto_smooth = False
+        if not BLENDER_41_PLUS:
+            use_auto_smooth = getattr(obj.data, "use_auto_smooth", False)
+
+        if use_auto_smooth:
             mod = obj.modifiers.new("EdgeSplitExport", 'EDGE_SPLIT')
             mod.split_angle = obj.data.auto_smooth_angle
         
         depsgraph = context.evaluated_depsgraph_get()
         mesh =  bpy.data.meshes.new_from_object(obj.evaluated_get(depsgraph), preserve_all_data_layers=True, depsgraph=depsgraph)
         
-        if obj.data.use_auto_smooth:
+        if use_auto_smooth and mod:
             obj.modifiers.remove(mod)
 
         # Triangulate for web export
@@ -76,7 +82,8 @@ class War3Model:
         bm.free()
         del bm
 
-        mesh.calc_normals_split()
+        if not BLENDER_41_PLUS:
+            mesh.calc_normals_split()
         mesh.calc_loop_triangles()
 
         return mesh
