@@ -3,6 +3,16 @@ from .War3MaterialLayer import War3MaterialLayer
 from .War3Texture import War3Texture
 from .War3TextureAnim import War3TextureAnim
 
+def get_fallback_texture_path(mat):
+    if mat.use_nodes and mat.node_tree is not None:
+        for node in mat.node_tree.nodes:
+            if node.bl_idname == 'ShaderNodeTexImage' and node.image is not None:
+                name = node.image.name
+                if "." in name:
+                    name = name.rsplit(".", 1)[0]
+                return "%s.blp" % name
+    return "Textures\\white.blp"
+
 class War3Material:
     def __init__(self, name):
         self.name = name
@@ -66,7 +76,14 @@ class War3Material:
                 
         
         if not len(material.layers):
-            material.layers.append(War3MaterialLayer())
+            layer = War3MaterialLayer()
+            texture = War3Texture(get_fallback_texture_path(mat))
+            if texture in model.textures:
+                layer.texture_id = model.textures.index(texture)
+            else:
+                model.textures.append(texture)
+                layer.texture_id = len(model.textures) - 1
+            material.layers.append(layer)
         
         return material
         

@@ -132,7 +132,7 @@ class War3AnimationCurve:
             target.keyframe_insert(data_path, frame=frame)
 
         for channel in range(num_channels):
-            curve = anim_data_obj.animation_data.action.fcurves.find(full_data_path, index=channel)
+            curve = find_action_fcurve(anim_data_obj.animation_data, full_data_path, index=channel)
 
             if curve is None:
                 print("Missing curve for object %s, data path %s, channel %d" % (anim_data_obj.name, data_path, channel))
@@ -366,7 +366,7 @@ class War3AnimationCurve:
    
         if anim_data and anim_data.action:
             for index in range(num_indices):
-                curve = anim_data.action.fcurves.find(data_path, index=index)
+                curve = find_action_fcurve(anim_data, data_path, index=index)
                 if curve is not None:
                     curves[(data_path.split('.')[-1], index)] = curve # For now, i'm just interested in the type, not the whole data path. Hence, the split returns the name after the last dot. 
             

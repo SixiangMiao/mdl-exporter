@@ -239,17 +239,17 @@ def save(operator, context, settings, filepath="", mdl_version=800):
             writer.end_scope()
             
             # Faces
-            writer.begin_scope("Faces", "%d %d" % (len(geoset.triangles), len(geoset.triangles) * 3))
+            triangle_indices = list(itertools.chain.from_iterable(geoset.triangles))
+            writer.begin_scope("Faces", "%d %d" % (1, len(triangle_indices)))
             writer.begin_scope("Triangles")
-            for triangle in geoset.triangles:
-                writer.write("{%d, %d, %d}" % triangle[:])
-                
+            writer.write("{ %s }" % ', '.join(str(index) for index in triangle_indices))
+
             writer.end_scope()
             writer.end_scope()
             
             writer.begin_scope("Groups", "%d %d" % (len(geoset.matrices), sum(len(mtrx) for mtrx in geoset.matrices)))
             for matrix in geoset.matrices:
-                writer.write("Matrices {%s}" % ','.join(str(model.object_indices[g]) for g in matrix))
+                writer.write("Matrices { %s }" % ', '.join(str(model.object_indices[g]) for g in matrix))
             writer.end_scope()
             
             writer.write("MinimumExtent {%s, %s, %s}" % tuple(map(f2s, geoset.min_extent)))
