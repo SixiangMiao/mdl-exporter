@@ -564,9 +564,12 @@ class War3Model:
 
                 root.pivot = settings.global_matrix @ Vector(obj.location)
 
-                root.anim_loc = anim_loc
-                root.anim_scale = anim_scale
-                root.anim_rot = anim_rot
+                # Armature object transforms are often import-scale/axis-correction
+                # data. Exporting them as a Warcraft root helper animation can
+                # shrink or rotate the entire rig on playback.
+                root.anim_loc = None
+                root.anim_scale = None
+                root.anim_rot = None
 
                 self.register_global_sequence(root.anim_scale)
 
@@ -632,6 +635,11 @@ class War3Model:
                     bone.anim_scale = War3AnimationCurve.get(
                         obj.animation_data, datapath % "scale", 3, self.sequences
                     )  # get_curves(obj, datapath % 'scale', (0, 1, 2))
+                    if (
+                        bone.anim_scale is not None
+                        and bone.anim_scale.is_static_value((1, 1, 1))
+                    ):
+                        bone.anim_scale = None
                     if settings.optimize_animation and bone.anim_scale is not None:
                         bone.anim_scale.optimize(
                             settings.optimize_tolerance, self.sequences

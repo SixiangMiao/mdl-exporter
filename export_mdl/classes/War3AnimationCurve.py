@@ -249,6 +249,19 @@ class War3AnimationCurve:
             if self.interpolation == 'Bezier':
                 self.handles_right[frame] = tuple(matrix @ Vector(self.handles_right[frame]))
                 self.handles_left[frame] = tuple(matrix @ Vector(self.handles_left[frame]))
+
+    def is_static_value(self, expected, tolerance=0.001):
+        if not self.keyframes:
+            return False
+
+        for value in self.keyframes.values():
+            if len(value) != len(expected):
+                return False
+            for index, expected_value in enumerate(expected):
+                if abs(value[index] - expected_value) > tolerance:
+                    return False
+
+        return True
             
         
     def write_mdl(self, name, writer, model):
