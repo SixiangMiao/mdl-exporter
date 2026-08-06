@@ -655,9 +655,8 @@ class War3Model:
                         self.register_global_sequence(bone.anim_loc)
 
                     if bone.anim_rot is not None:
-                        mat_pose_ws = obj.matrix_world @ b.bone.matrix_local
-                        mat_rest_ws = obj.matrix_world @ b.matrix
-                        bone.anim_rot.transform_rot(mat_pose_ws)
+                        mat_rest_ws = obj.matrix_world @ b.bone.matrix_local
+                        bone.anim_rot.transform_rot(mat_rest_ws)
                         bone.anim_rot.transform_rot(settings.global_matrix)
                         self.register_global_sequence(bone.anim_rot)
 

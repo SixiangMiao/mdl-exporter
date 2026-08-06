@@ -234,10 +234,11 @@ class War3AnimationCurve:
         print('After: %d' % len(self.keyframes))
 
     def transform_rot(self, matrix):
+        rot_matrix = matrix.to_3x3().normalized().to_4x4()
         for frame in self.keyframes.keys():
             axis, angle = Quaternion(self.keyframes[frame]).to_axis_angle()
-            
-            axis.rotate(matrix)
+
+            axis.rotate(rot_matrix)
             quat = Quaternion(axis, angle)
             quat.normalize()
             
