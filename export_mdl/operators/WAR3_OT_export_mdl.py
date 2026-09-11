@@ -1,7 +1,7 @@
 import bpy
 
 from bpy.types import Operator
-from bpy.props import FloatProperty, BoolProperty, StringProperty
+from bpy.props import FloatProperty, BoolProperty, EnumProperty, StringProperty
 
 from bpy_extras.io_utils import (
         ExportHelper,
@@ -55,6 +55,29 @@ class WAR3_OT_export_mdl(Operator, ExportHelper):
             subtype='DISTANCE',
             unit='LENGTH'
             )
+
+    root_rotation_mode : EnumProperty(
+            name="Root Rotation",
+            description="How armature-object rotation is exported to the MDL root node",
+            items=(
+                (
+                    "YAW_ONLY",
+                    "Vertical Axis Only",
+                    "Keep turning around the MDL Z axis, but remove whole-model forward and sideways tilt",
+                ),
+                (
+                    "FULL",
+                    "Full Rotation",
+                    "Keep all armature-object root rotation from the source animation",
+                ),
+                (
+                    "NONE",
+                    "None",
+                    "Do not export armature-object root rotation",
+                ),
+            ),
+            default="YAW_ONLY",
+            )
     
     def execute(self, context):                                   
         filepath = self.filepath
@@ -68,6 +91,7 @@ class WAR3_OT_export_mdl(Operator, ExportHelper):
         settings.use_selection = self.use_selection
         settings.optimize_animation = self.optimize_animation
         settings.optimize_tolerance = self.optimize_tolerance
+        settings.root_rotation_mode = self.root_rotation_mode
         
         from .. import export_mdl
         export_mdl.save(self, context, settings, filepath=filepath, mdl_version=800)
@@ -81,6 +105,7 @@ class WAR3_OT_export_mdl(Operator, ExportHelper):
         layout.prop(self, "global_scale")
         layout.prop(self, "axis_forward")
         layout.prop(self, "axis_up")
+        layout.prop(self, 'root_rotation_mode')
         layout.separator()
         layout.prop(self, 'optimize_animation')
         if self.optimize_animation:

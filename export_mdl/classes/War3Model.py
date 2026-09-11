@@ -63,12 +63,33 @@ class War3Model:
             mod = obj.modifiers.new("EdgeSplitExport", "EDGE_SPLIT")
             mod.split_angle = obj.data.auto_smooth_angle
 
-        depsgraph = context.evaluated_depsgraph_get()
-        mesh = bpy.data.meshes.new_from_object(
-            obj.evaluated_get(depsgraph),
-            preserve_all_data_layers=True,
-            depsgraph=depsgraph,
-        )
+        # An evaluated object includes the current Armature deformation.  MDL
+        # vertices must instead be exported in bind/rest space because the MDL
+        # bone tracks deform them again at runtime.  Baking the current pose
+        # here causes the characteristic stretched hands, feet and accessories
+        # seen after opening the model in Retera Model Studio.
+        armature_states = []
+        for modifier in obj.modifiers:
+            if modifier.type == "ARMATURE":
+                armature_states.append(
+                    (modifier, modifier.show_viewport, modifier.show_render)
+                )
+                modifier.show_viewport = False
+                modifier.show_render = False
+
+        try:
+            context.view_layer.update()
+            depsgraph = context.evaluated_depsgraph_get()
+            mesh = bpy.data.meshes.new_from_object(
+                obj.evaluated_get(depsgraph),
+                preserve_all_data_layers=True,
+                depsgraph=depsgraph,
+            )
+        finally:
+            for modifier, show_viewport, show_render in armature_states:
+                modifier.show_viewport = show_viewport
+                modifier.show_render = show_render
+            context.view_layer.update()
 
         if use_auto_smooth and mod:
             obj.modifiers.remove(mod)
@@ -90,6 +111,99 @@ class War3Model:
         mesh.calc_loop_triangles()
 
         return mesh
+
+    @staticmethod
+    def split_geoset_by_matrix_groups(geoset, max_matrix_groups=256):
+        """Split an oversized classic-MDX geoset without changing its skinning.
+
+        FormatVersion 800 stores each vertex's matrix-group index in one byte,
+        so every Geoset must have at most 256 matrix groups. The split is made
+        only between complete triangles. Vertices on a split boundary are
+        duplicated, while their position, normal, UV and bone set stay intact.
+        """
+        if len(geoset.matrices) <= max_matrix_groups:
+            return [geoset]
+
+        triangle_chunks = []
+        current_triangles = []
+        current_matrix_indices = set()
+
+        # Preserve face order for transparent/additive materials.
+        for triangle in geoset.triangles:
+            triangle_matrix_indices = {
+                geoset.vertices[vertex_index][3]
+                for vertex_index in triangle
+            }
+            if len(triangle_matrix_indices) > max_matrix_groups:
+                raise RuntimeError(
+                    "A single triangle uses more than %d matrix groups"
+                    % max_matrix_groups
+                )
+
+            combined = current_matrix_indices | triangle_matrix_indices
+            if current_triangles and len(combined) > max_matrix_groups:
+                triangle_chunks.append(current_triangles)
+                current_triangles = []
+                current_matrix_indices = set()
+
+            current_triangles.append(triangle)
+            current_matrix_indices.update(triangle_matrix_indices)
+
+        if current_triangles:
+            triangle_chunks.append(current_triangles)
+
+        split_geosets = []
+        for triangles in triangle_chunks:
+            split = War3Geoset()
+            split.mat_name = geoset.mat_name
+            split.material_id = geoset.material_id
+            split.objects = list(geoset.objects)
+
+            # A GeosetAnim points to exactly one Geoset in MDL. Each split
+            # therefore needs its own wrapper, while the animation curves may
+            # safely be shared because they are read-only during export.
+            if geoset.geoset_anim is not None:
+                source_anim = geoset.geoset_anim
+                split_anim = War3GeosetAnim(
+                    source_anim.color,
+                    source_anim.color_anim,
+                    source_anim.alpha_anim,
+                )
+                split_anim.geoset = split
+                split.geoset_anim = split_anim
+
+            vertex_map = {}
+            matrix_map = {}
+            for triangle in triangles:
+                split_triangle = []
+                for old_vertex_index in triangle:
+                    if old_vertex_index not in vertex_map:
+                        old_vertex = geoset.vertices[old_vertex_index]
+                        old_matrix_index = old_vertex[3]
+
+                        if old_matrix_index not in matrix_map:
+                            matrix_map[old_matrix_index] = len(split.matrices)
+                            split.matrices.append(
+                                list(geoset.matrices[old_matrix_index])
+                            )
+
+                        vertex_map[old_vertex_index] = len(split.vertices)
+                        split.vertices.append(
+                            (
+                                old_vertex[0],
+                                old_vertex[1],
+                                old_vertex[2],
+                                matrix_map[old_matrix_index],
+                            )
+                        )
+
+                    split_triangle.append(vertex_map[old_vertex_index])
+
+                split.triangles.append(tuple(split_triangle))
+
+            split_geosets.append(split)
+
+        return split_geosets
 
     @staticmethod
     def get_parent(obj):
@@ -116,9 +230,10 @@ class War3Model:
         animations = (anim_loc, anim_rot, anim_scale)
 
         if not any(animations):
-            root_parent = War3Model.get_parent(parent)
-            if root_parent is not None:
-                return root_parent
+            # Static generic empties are not emitted as MDL nodes.  Skip them
+            # completely, including when they are at the scene root, instead
+            # of returning a parent name that can never appear in ObjectId.
+            return War3Model.get_parent(parent)
 
         return parent.name
 
@@ -441,24 +556,64 @@ class War3Model:
                                 reverse=True,
                             )  # Sort bones by descending weight
                             if len(vgroups):
-                                # Warcraft does not support vertex weights, so we exclude groups with too small influence
-                                groups = list(
-                                    obj.vertex_groups[vg.group].name
-                                    for vg in vgroups
-                                    if (
-                                        obj.vertex_groups[vg.group].name in bone_names
-                                        and vg.weight > 0.25
+                                # Classic MDL stores only a set of bones and
+                                # gives every bone in that set equal influence.
+                                # Choose the best uniform 1/2/3-bone
+                                # approximation instead of discarding every
+                                # influence <= 0.25. The old threshold collapsed
+                                # many shoulder/hand vertices to one bone.
+                                influences = [
+                                    (
+                                        obj.vertex_groups[vg.group].name,
+                                        vg.weight,
                                     )
-                                )[:3]
-                                if not len(groups):
-                                    for vg in vgroups:
-                                        # If we didn't find a group, just take the best match (the list is already sorted by weight)
-                                        if (
-                                            obj.vertex_groups[vg.group].name
-                                            in bone_names
-                                        ):
-                                            groups = [obj.vertex_groups[vg.group].name]
-                                            break
+                                    for vg in vgroups
+                                    if obj.vertex_groups[vg.group].name in bone_names
+                                    and vg.weight > 0.0
+                                ]
+                                if influences:
+                                    total_weight = sum(weight for _, weight in influences)
+                                    normalized = [
+                                        weight / total_weight
+                                        for _, weight in influences
+                                    ]
+
+                                    def uniform_error(count):
+                                        uniform = 1.0 / count
+                                        return sum(
+                                            (
+                                                weight
+                                                - (uniform if index < count else 0.0)
+                                            )
+                                            ** 2
+                                            for index, weight in enumerate(normalized)
+                                        )
+
+                                    best_count = min(
+                                        range(1, min(3, len(influences)) + 1),
+                                        key=lambda count: (uniform_error(count), count),
+                                    )
+                                    groups = [
+                                        name for name, _ in influences[:best_count]
+                                    ]
+
+                                # Classic MDL/MDX matrix groups do not retain
+                                # Blender's original weights: every bone in a
+                                # matrix group contributes equally. Canonicalize
+                                # the bone order so identical bone sets do not
+                                # become different groups merely because their
+                                # Blender weight order differs. MDX stores the
+                                # resulting VertexGroup index in one byte.
+                                # Some legacy FBX files retain vertex-group
+                                # names for attachment bones that are not part
+                                # of the mesh's current Armature modifier. In
+                                # that case ``influences`` is empty and groups
+                                # intentionally stays None so the parent-node
+                                # fallback below can handle the vertex. Do not
+                                # sort before that fallback has had a chance to
+                                # run.
+                                if groups is not None:
+                                    groups.sort()
 
                         if parent is not None and (groups is None or len(groups) == 0):
                             groups = [parent]
@@ -564,12 +719,21 @@ class War3Model:
 
                 root.pivot = settings.global_matrix @ Vector(obj.location)
 
-                # Armature object transforms are often import-scale/axis-correction
-                # data. Exporting them as a Warcraft root helper animation can
-                # shrink or rotate the entire rig on playback.
-                root.anim_loc = None
+                # Keep armature root motion as a delta from the bind pose, but
+                # do not export import scale such as 0.01. Imported character
+                # actions often contain pitch/roll on the armature object;
+                # exporting that unchanged tilts the entire Warcraft unit.
+                root.anim_loc = anim_loc
                 root.anim_scale = None
-                root.anim_rot = None
+                root_rotation_mode = getattr(
+                    settings, "root_rotation_mode", "YAW_ONLY"
+                )
+                root.anim_rot = anim_rot if root_rotation_mode != "NONE" else None
+
+                if root.anim_loc is not None:
+                    root.anim_loc.make_translation_relative()
+                if root.anim_rot is not None:
+                    root.anim_rot.make_rotation_relative()
 
                 self.register_global_sequence(root.anim_scale)
 
@@ -580,10 +744,20 @@ class War3Model:
                     root.anim_loc.transform_vec(settings.global_matrix)
 
                 if root.anim_rot is not None:
-                    self.register_global_sequence(root.anim_rot)
                     if obj.parent is not None:
                         root.anim_rot.transform_rot(obj.parent.matrix_world.inverted())
                     root.anim_rot.transform_rot(settings.global_matrix)
+                    if root_rotation_mode == "YAW_ONLY":
+                        # MDL uses Z as its vertical axis. Preserve heading but
+                        # discard whole-model pitch and roll.
+                        root.anim_rot.keep_rotation_twist((0.0, 0.0, 1.0))
+
+                    if root.anim_rot.is_static_value(
+                        (1.0, 0.0, 0.0, 0.0), tolerance=1e-6
+                    ):
+                        root.anim_rot = None
+                    else:
+                        self.register_global_sequence(root.anim_rot)
 
                 root.visibility = visibility
                 self.register_global_sequence(visibility)
@@ -742,7 +916,53 @@ class War3Model:
 
                 self.cameras.append(camera)
 
-        self.geosets = list(geoset_map.values())
+        source_geosets = list(geoset_map.values())
+        self.geosets = []
+
+        # Legacy (FormatVersion 800) MDX stores a vertex's matrix-group index
+        # in one byte. Split oversized geosets automatically instead of
+        # allowing Retera Model Studio to wrap indices over 255 and bind those
+        # vertices to unrelated bones.
+        for source_index, geoset in enumerate(source_geosets):
+            split_geosets = self.split_geoset_by_matrix_groups(geoset, 256)
+            self.geosets.extend(split_geosets)
+
+            if len(split_geosets) > 1:
+                object_names = ", ".join(obj.name for obj in geoset.objects)
+                matrix_counts = ", ".join(
+                    str(len(split.matrices)) for split in split_geosets
+                )
+                report(
+                    {"WARNING"},
+                    (
+                        "Automatically split Geoset %d (%s) from %d matrix "
+                        "groups into %d geosets (%s groups)."
+                    )
+                    % (
+                        source_index,
+                        object_names or "unknown objects",
+                        len(geoset.matrices),
+                        len(split_geosets),
+                        matrix_counts,
+                    ),
+                )
+
+        # Keep a strict post-condition so future changes cannot silently
+        # generate an invalid classic MDX file.
+        oversized_geosets = [
+            (index, len(geoset.matrices))
+            for index, geoset in enumerate(self.geosets)
+            if len(geoset.matrices) > 256
+        ]
+        if oversized_geosets:
+            raise RuntimeError(
+                "Automatic Geoset splitting failed: %s"
+                % "; ".join(
+                    "Geoset %d still has %d matrix groups" % item
+                    for item in oversized_geosets
+                )
+            )
+
         self.materials = [War3Material.get(mat, self) for mat in mats]
         # Add default material if no other materials present
         if any((x for x in self.geosets if x.mat_name == "default")):
@@ -1143,15 +1363,18 @@ class War3Model:
 
             if any(True for layer in material.layers if layer.filter_mode == "None"):
                 mat.blend_method = "OPAQUE"
-                mat.shadow_method = "OPAQUE"
+                if hasattr(mat, "shadow_method"):
+                    mat.shadow_method = "OPAQUE"
             elif any(
                 True for layer in material.layers if layer.filter_mode == "Transparent"
             ):
                 mat.blend_method = "CLIP"
-                mat.shadow_method = "CLIP"
+                if hasattr(mat, "shadow_method"):
+                    mat.shadow_method = "CLIP"
             else:
                 mat.blend_method = "BLEND"
-                mat.shadow_method = "NONE"
+                if hasattr(mat, "shadow_method"):
+                    mat.shadow_method = "NONE"
 
             if (
                 len([True for layer in material.layers if layer.filter_mode == "None"])

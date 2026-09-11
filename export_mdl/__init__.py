@@ -60,11 +60,21 @@ def register():
     presets_path = os.path.join(bpy.utils.user_resource('SCRIPTS', path="presets"), "mdl_exporter")
     emitters_path = os.path.join(presets_path, "emitters")
     
-    if not os.path.exists(emitters_path):
-        os.makedirs(emitters_path)
-        source_path = os.path.join(os.path.join(os.path.dirname(__file__), "presets"), "emitters")
-        files = os.listdir(source_path) 
-        [shutil.copy2(os.path.join(source_path, f), emitters_path) for f in files]
+    # Blender may create the parent preset folders while the add-on is being
+    # registered.  Make registration idempotent instead of racing a separate
+    # exists() check followed by makedirs().
+    source_path = os.path.join(os.path.join(os.path.dirname(__file__), "presets"), "emitters")
+    try:
+        os.makedirs(emitters_path, exist_ok=True)
+        files = os.listdir(source_path)
+        for filename in files:
+            destination = os.path.join(emitters_path, filename)
+            if not os.path.exists(destination):
+                shutil.copy2(os.path.join(source_path, filename), destination)
+    except OSError:
+        # Presets are optional; a read-only Blender configuration directory
+        # must not prevent the MDL importer/exporter itself from loading.
+        pass
     
     
 def unregister():

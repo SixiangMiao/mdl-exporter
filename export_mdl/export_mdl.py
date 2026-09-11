@@ -161,8 +161,11 @@ def save(operator, context, settings, filepath="", mdl_version=800):
                 writer.begin_scope("Layer")
                 writer.write("FilterMode %s" % layer.filter_mode)
 
-                if layer.unshaded is True:
-                    writer.write("Unshaded")
+                # Character models in this workflow use baked lighting in
+                # their textures. Always emit the Warcraft III layer flag so
+                # newly exported MDLs do not need to be edited manually in
+                # Retera Model Studio.
+                writer.write("Unshaded")
                     
                 if layer.two_sided is True:
                     writer.write("TwoSided")

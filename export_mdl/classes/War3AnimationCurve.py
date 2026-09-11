@@ -251,6 +251,72 @@ class War3AnimationCurve:
                 self.handles_right[frame] = tuple(matrix @ Vector(self.handles_right[frame]))
                 self.handles_left[frame] = tuple(matrix @ Vector(self.handles_left[frame]))
 
+    def make_translation_relative(self):
+        if not self.keyframes:
+            return
+
+        base_frame = min(self.keyframes.keys())
+        base_value = Vector(self.keyframes[base_frame])
+
+        for frame in self.keyframes.keys():
+            self.keyframes[frame] = tuple(Vector(self.keyframes[frame]) - base_value)
+            if frame in self.handles_right:
+                self.handles_right[frame] = tuple(
+                    Vector(self.handles_right[frame]) - base_value
+                )
+            if frame in self.handles_left:
+                self.handles_left[frame] = tuple(
+                    Vector(self.handles_left[frame]) - base_value
+                )
+
+    def make_rotation_relative(self):
+        if not self.keyframes:
+            return
+
+        base_frame = min(self.keyframes.keys())
+        base_inv = Quaternion(self.keyframes[base_frame]).inverted()
+
+        for frame in self.keyframes.keys():
+            quat = Quaternion(self.keyframes[frame]) @ base_inv
+            quat.normalize()
+            self.keyframes[frame] = tuple(quat)
+
+    def keep_rotation_twist(self, axis=(0.0, 0.0, 1.0)):
+        """Keep only quaternion twist around one axis.
+
+        This removes root-bone pitch/roll without converting through Euler
+        angles, avoiding gimbal-lock and angle-wrap artifacts. Rotation curves
+        are exported as Linear by this add-on, so quaternion handles do not
+        need separate processing.
+        """
+        twist_axis = Vector(axis)
+        if twist_axis.length_squared == 0.0:
+            raise ValueError("Rotation twist axis must be non-zero")
+        twist_axis.normalize()
+
+        previous = None
+        for frame in sorted(self.keyframes.keys()):
+            source = Quaternion(self.keyframes[frame])
+            vector = Vector((source.x, source.y, source.z))
+            projected = twist_axis * vector.dot(twist_axis)
+            norm_squared = source.w * source.w + projected.length_squared
+
+            if norm_squared < 1e-12:
+                twist = Quaternion((1.0, 0.0, 0.0, 0.0))
+            else:
+                twist = Quaternion(
+                    (source.w, projected.x, projected.y, projected.z)
+                )
+                twist.normalize()
+
+            # q and -q describe the same orientation. Keep signs continuous
+            # so MDL linear interpolation takes the short path.
+            if previous is not None and previous.dot(twist) < 0.0:
+                twist.negate()
+
+            self.keyframes[frame] = tuple(twist)
+            previous = twist
+
     def is_static_value(self, expected, tolerance=0.001):
         if not self.keyframes:
             return False
